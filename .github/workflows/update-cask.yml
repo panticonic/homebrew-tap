@@ -1,0 +1,64 @@
+name: Update cask
+
+# The tap updates itself rather than being pushed to. A cross-repository write
+# would need a credential this organization does not allow (deploy keys are
+# disabled) or a broad personal token; polling a public release needs neither,
+# and the tap's own GITHUB_TOKEN is enough to write to the tap.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  update:
+    name: Track the latest Vibestudio release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Render the cask for the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo panticonic/vibestudio --json tagName --jq .tagName)
+          echo "latest release: $tag"
+
+          asset=$(gh release view "$tag" --repo panticonic/vibestudio \
+            --json assets --jq '.assets[].name | select(endswith(".dmg"))' | head -n1)
+          if [ -z "$asset" ]; then
+            echo "release $tag has no DMG yet; nothing to publish"
+            exit 0
+          fi
+
+          gh release download "$tag" --repo panticonic/vibestudio --pattern "$asset" --dir .
+          # Prefer the checksum the release publishes over one computed here, so a
+          # tampered download cannot be pinned into the cask as if it were genuine.
+          if gh release download "$tag" --repo panticonic/vibestudio \
+               --pattern SHA256SUMS-macos --dir . 2>/dev/null; then
+            grep -F "$asset" SHA256SUMS-macos | shasum -a 256 --check -
+          fi
+
+          url="https://github.com/panticonic/vibestudio/releases/download/${tag}/${asset}"
+          node scripts/render-cask.mjs "${tag#v}" "$asset" "$url" > Casks/vibestudio.rb
+          rm -f "$asset" SHA256SUMS-macos
+          cat Casks/vibestudio.rb
+
+      - name: Commit when the cask changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Casks/vibestudio.rb; then
+            echo "cask already current"
+            exit 0
+          fi
+          version=$(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/vibestudio.rb)
+          git config user.name "vibestudio-release"
+          git config user.email "packages@vibestudio.app"
+          git add Casks/vibestudio.rb
+          git commit -m "vibestudio ${version}"
+          git push
