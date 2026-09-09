@@ -26,8 +26,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag=$(gh release view --repo panticonic/vibestudio --json tagName --jq .tagName)
-          echo "latest release: $tag"
+          # `gh release view` returns whichever release is flagged Latest, which
+          # includes auxiliary ones like the native-artifact repairs. Track the
+          # newest product version tag instead.
+          tag=$(gh release list --repo panticonic/vibestudio --limit 50 --json tagName \
+            --jq '[.[].tagName | select(test("^v[0-9]"))] | first')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "no product release tagged v* yet; nothing to publish"
+            exit 0
+          fi
+          echo "latest product release: $tag"
 
           asset=$(gh release view "$tag" --repo panticonic/vibestudio \
             --json assets --jq '.assets[].name | select(endswith(".dmg"))' | head -n1)
