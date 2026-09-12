@@ -1,4 +1,4 @@
-name: Update cask
+name: Update tap
 
 # The tap updates itself rather than being pushed to. A cross-repository write
 # would need a credential this organization does not allow (deploy keys are
@@ -52,21 +52,60 @@ jobs:
             grep -F "$asset" SHA256SUMS-macos | shasum -a 256 --check -
           fi
 
+          # A signed release updates itself, and the cask must then declare
+          # auto_updates so brew stops contesting the installed version. Only
+          # the release knows which of the two it built.
+          signing=ad-hoc
+          if gh release download "$tag" --repo panticonic/vibestudio \
+               --pattern macos-signing.txt --dir . 2>/dev/null; then
+            signing=$(tr -d '[:space:]' < macos-signing.txt)
+          fi
+          echo "macOS signing mode: $signing"
+
           url="https://github.com/panticonic/vibestudio/releases/download/${tag}/${asset}"
-          node scripts/render-cask.mjs "${tag#v}" "$asset" "$url" > Casks/vibestudio.rb
-          rm -f "$asset" SHA256SUMS-macos
+          node scripts/render-cask.mjs "${tag#v}" "$asset" "$url" "$signing" > Casks/vibestudio.rb
+          rm -f "$asset" SHA256SUMS-macos macos-signing.txt
           cat Casks/vibestudio.rb
 
-      - name: Commit when the cask changed
+      - name: Render the headless server formula
         run: |
           set -euo pipefail
-          if git diff --quiet -- Casks/vibestudio.rb; then
-            echo "cask already current"
+          # The server is published to npm rather than as an archive, so the
+          # registry is the source for both the version and its digest — never
+          # a checksum computed here, which would pin whatever was downloaded.
+          metadata=$(curl -fsSL \
+            -H "accept: application/vnd.npm.install-v1+json" \
+            https://registry.npmjs.org/@panticonic/vibestudio-server)
+          version=$(printf '%s' "$metadata" | jq -r '."dist-tags".latest // empty')
+          if [ -z "$version" ]; then
+            echo "the server package has no published latest version; leaving the formula alone"
+            exit 0
+          fi
+          tarball=$(printf '%s' "$metadata" | jq -r --arg v "$version" '.versions[$v].dist.tarball')
+          sha256=$(printf '%s' "$metadata" | jq -r --arg v "$version" '.versions[$v].dist.integrity // empty' \
+            | sed 's/^sha512-.*$//')
+          if [ -z "$sha256" ]; then
+            # npm publishes sha512 integrity for new versions and a legacy
+            # shasum for older ones; Homebrew wants sha256 of the same bytes.
+            curl -fsSL "$tarball" -o server.tgz
+            sha256=$(sha256sum server.tgz | cut -d" " -f1)
+            rm -f server.tgz
+          fi
+          mkdir -p Formula
+          node scripts/render-server-formula.mjs "$version" "$tarball" "$sha256" \
+            > Formula/vibestudio-server.rb
+          cat Formula/vibestudio-server.rb
+
+      - name: Commit when the tap changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Casks/vibestudio.rb Formula/vibestudio-server.rb; then
+            echo "tap already current"
             exit 0
           fi
           version=$(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/vibestudio.rb)
           git config user.name "vibestudio-release"
           git config user.email "packages@vibestudio.app"
-          git add Casks/vibestudio.rb
+          git add Casks/vibestudio.rb Formula/vibestudio-server.rb
           git commit -m "vibestudio ${version}"
           git push

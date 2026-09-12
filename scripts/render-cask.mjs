@@ -3,21 +3,30 @@
  * Render the Homebrew Cask that distributes the macOS build.
  *
  * Squirrel refuses to auto-update a build without a Developer ID signature, so
- * an ad-hoc signed app has no in-app update path. A cask restores one through
- * the package manager the audience already runs — the same choice made for
- * Linux, where apt and dnf carry updates instead of an in-app updater.
+ * an ad-hoc signed app has no in-app update path and this cask is the only one
+ * it has. A signed release does update itself, and then the cask has to say so:
+ * `auto_updates true` tells brew the app moves on its own, so `brew upgrade`
+ * stops fighting it over which version is installed.
  *
- * Usage: render-homebrew-cask.mjs <version> <dmg-path> <download-url>
+ * The release publishes which of the two it is, because a tap on a Linux runner
+ * cannot inspect a macOS signature.
+ *
+ * Usage: render-cask.mjs <version> <dmg-path> <download-url> [signing-mode]
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-const [version, dmgPath, downloadUrl] = process.argv.slice(2);
+const [version, dmgPath, downloadUrl, signingMode = "ad-hoc"] = process.argv.slice(2);
 if (!version || !dmgPath || !downloadUrl) {
-  console.error("usage: render-homebrew-cask.mjs <version> <dmg-path> <download-url>");
+  console.error("usage: render-cask.mjs <version> <dmg-path> <download-url> [signing-mode]");
   process.exit(1);
 }
+if (signingMode !== "developer-id" && signingMode !== "ad-hoc") {
+  console.error(`unknown signing mode ${signingMode}; expected developer-id or ad-hoc`);
+  process.exit(1);
+}
+const selfUpdating = signingMode === "developer-id";
 
 const sha256 = createHash("sha256").update(readFileSync(dmgPath)).digest("hex");
 
@@ -35,7 +44,7 @@ process.stdout.write(`cask "vibestudio" do
   homepage "https://vibestudio.app/"
 
   depends_on macos: ">= :sonoma"
-
+${selfUpdating ? "\n  auto_updates true\n" : ""}
   app "Vibestudio.app"
 
   zap trash: [
