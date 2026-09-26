@@ -30,20 +30,19 @@ const selfUpdating = signingMode === "developer-id";
 
 const sha256 = createHash("sha256").update(readFileSync(dmgPath)).digest("hex");
 
-// `depends_on macos: ">= :sonoma"` mirrors electron-builder's minimumSystemVersion.
+// `depends_on macos: :sonoma` mirrors electron-builder's minimumSystemVersion.
 // Quarantine is left in place deliberately: an unsigned build should still be
 // something the user consciously admits, not something a formula waves through.
 process.stdout.write(`cask "vibestudio" do
   version "${version}"
   sha256 "${sha256}"
 
-  url "${downloadUrl}",
-      verified: "github.com/panticonic/vibestudio/"
+  url "${downloadUrl}"
   name "Vibestudio"
   desc "Stacked panel workspace for agentic workflows"
   homepage "https://vibestudio.app/"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 ${selfUpdating ? "\n  auto_updates true\n" : ""}
   app "Vibestudio.app"
 
