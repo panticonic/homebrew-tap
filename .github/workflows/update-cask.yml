@@ -21,6 +21,9 @@ jobs:
       - name: Checkout tap
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      - name: Prepare generated package directories
+        run: mkdir -p Casks Formula
+
       - name: Render the cask for the latest release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -91,7 +94,6 @@ jobs:
             sha256=$(sha256sum server.tgz | cut -d" " -f1)
             rm -f server.tgz
           fi
-          mkdir -p Formula
           node scripts/render-server-formula.mjs "$version" "$tarball" "$sha256" \
             > Formula/vibestudio-server.rb
           cat Formula/vibestudio-server.rb
@@ -99,7 +101,7 @@ jobs:
       - name: Commit when the tap changed
         run: |
           set -euo pipefail
-          if git diff --quiet -- Casks/vibestudio.rb Formula/vibestudio-server.rb; then
+          if [ -z "$(git status --short -- Casks/vibestudio.rb Formula/vibestudio-server.rb)" ]; then
             echo "tap already current"
             exit 0
           fi
