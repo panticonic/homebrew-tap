@@ -1,8 +1,8 @@
 class VibestudioServer < Formula
   desc "Headless Vibestudio server and CLI"
   homepage "https://vibestudio.app/"
-  url "https://registry.npmjs.org/@panticonic/vibestudio-server/-/vibestudio-server-0.1.52.tgz"
-  sha256 "68cbe9c59adb8dbd2a4831d952b49e39a2961295c3b980ba2587e5bf5c9f91e0"
+  url "https://registry.npmjs.org/@panticonic/vibestudio-server/-/vibestudio-server-0.1.55.tgz"
+  sha256 "1da8553ad167587e58c5694b3e37240c5020bf1e88d350c343cf80f59a3cb258"
   license "MIT"
 
   # The server builds workspace units at runtime with the toolchain it ships,
