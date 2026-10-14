@@ -1,8 +1,8 @@
 cask "vibestudio" do
-  version "0.1.83"
-  sha256 "7cc89b9521e7560036d5fac016c62c863b14957518a72cfca2e74f625aac76b4"
+  version "0.1.105"
+  sha256 "e8ed3e529dd3dbf2b5a67d11938db991591cedf6e555f2582477f6f049d577ae"
 
-  url "https://github.com/panticonic/vibestudio/releases/download/v0.1.83/Vibestudio-arm64.dmg"
+  url "https://github.com/panticonic/vibestudio/releases/download/v0.1.105/Vibestudio-arm64.dmg"
   name "Vibestudio"
   desc "Stacked panel workspace for agentic workflows"
   homepage "https://vibestudio.app/"
