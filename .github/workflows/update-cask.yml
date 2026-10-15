@@ -86,8 +86,8 @@ jobs:
           asset=Vibestudio-arm64.dmg
           gh release download "$RELEASE_TAG" --repo panticonic/vibestudio --dir . \
             --pattern "$asset" --pattern SHA256SUMS-macos --pattern macos-signing.txt
-          test "$(grep -Fc "  $asset" SHA256SUMS-macos)" -eq 1
-          grep -F "  $asset" SHA256SUMS-macos | shasum -a 256 --check -
+          test "$(grep -Fc "  ./$asset" SHA256SUMS-macos)" -eq 1
+          grep -F "  ./$asset" SHA256SUMS-macos | shasum -a 256 --check -
           signing=$(tr -d '[:space:]' < macos-signing.txt)
           case "$signing" in developer-id|ad-hoc) ;; *) exit 1 ;; esac
           echo "macOS signing mode: $signing"
