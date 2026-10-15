@@ -21,7 +21,10 @@ first launch (System Settings → Privacy & Security → Open Anyway), Squirrel
 refuses to replace it, and `brew upgrade` is then the update path — which is why
 this tap exists.
 
-Both files are written by this tap's own workflow, which polls
-[panticonic/vibestudio](https://github.com/panticonic/vibestudio) for releases
-and the npm registry for the server package. Edit the renderers in `scripts/`,
-not the generated `Casks/` and `Formula/` files.
+Both files are written atomically by this tap's own workflow. It resolves one
+complete public [Vibestudio release](https://github.com/panticonic/vibestudio),
+requires that release's checksum and signing records, and pins the server
+formula to the same exact version from npm. An exact version can be dispatched
+as soon as a release is public; the hourly schedule reconciles any missed
+dispatch. Edit the renderers in `scripts/`, not the generated `Casks/` and
+`Formula/` files.

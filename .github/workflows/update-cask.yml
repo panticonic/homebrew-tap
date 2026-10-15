@@ -11,9 +11,19 @@ on:
       - .github/workflows/update-cask.yml
       - scripts/render-cask.mjs
       - scripts/render-server-formula.mjs
+      - scripts/renderers.test.mjs
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published Vibestudio version to reconcile (defaults to newest stable)
+        type: string
+        required: false
+
+concurrency:
+  group: update-vibestudio-tap
+  cancel-in-progress: false
 
 permissions: {}
 
@@ -31,82 +41,89 @@ jobs:
           # when a previous run already published a commit before being rerun.
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Test package renderers
+        run: node --test scripts/renderers.test.mjs
+
       - name: Prepare generated package directories
         run: mkdir -p Casks Formula
 
-      - name: Render the cask for the latest release
+      - name: Resolve one complete public product release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          # `gh release view` returns whichever release is flagged Latest, which
-          # includes auxiliary ones like the native-artifact repairs. Track the
-          # newest product version tag instead.
-          tag=$(gh release list --repo panticonic/vibestudio --limit 50 --json tagName \
-            --jq '[.[].tagName | select(test("^v[0-9]"))] | first')
+          if [ -n "$REQUESTED_VERSION" ]; then
+            [[ "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            tag="v$REQUESTED_VERSION"
+          else
+            tag=$(gh release list --repo panticonic/vibestudio --limit 100 \
+              --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          fi
           if [ -z "$tag" ] || [ "$tag" = "null" ]; then
             echo "no product release tagged v* yet; nothing to publish"
             exit 0
           fi
-          echo "latest product release: $tag"
+          release=$(gh release view "$tag" --repo panticonic/vibestudio \
+            --json isDraft,isPrerelease,assets)
+          test "$(jq -r '.isDraft' <<<"$release")" = false
+          test "$(jq -r '.isPrerelease' <<<"$release")" = false
+          for asset in Vibestudio-arm64.dmg SHA256SUMS-macos macos-signing.txt; do
+            test "$(jq --arg asset "$asset" '[.assets[].name | select(. == $asset)] | length' <<<"$release")" -eq 1
+          done
+          printf 'tag=%s\nversion=%s\n' "$tag" "${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "product release: $tag"
 
-          asset=$(gh release view "$tag" --repo panticonic/vibestudio \
-            --json assets --jq '.assets[].name | select(endswith(".dmg"))' | head -n1)
-          if [ -z "$asset" ]; then
-            echo "release $tag has no DMG yet; nothing to publish"
-            exit 0
-          fi
-
-          gh release download "$tag" --repo panticonic/vibestudio --pattern "$asset" --dir .
-          # Prefer the checksum the release publishes over one computed here, so a
-          # tampered download cannot be pinned into the cask as if it were genuine.
-          if gh release download "$tag" --repo panticonic/vibestudio \
-               --pattern SHA256SUMS-macos --dir . 2>/dev/null; then
-            grep -F "$asset" SHA256SUMS-macos | shasum -a 256 --check -
-          fi
-
-          # A signed release updates itself, and the cask must then declare
-          # auto_updates so brew stops contesting the installed version. Only
-          # the release knows which of the two it built.
-          signing=ad-hoc
-          if gh release download "$tag" --repo panticonic/vibestudio \
-               --pattern macos-signing.txt --dir . 2>/dev/null; then
-            signing=$(tr -d '[:space:]' < macos-signing.txt)
-          fi
+      - name: Render the cask from that exact release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          asset=Vibestudio-arm64.dmg
+          gh release download "$RELEASE_TAG" --repo panticonic/vibestudio --dir . \
+            --pattern "$asset" --pattern SHA256SUMS-macos --pattern macos-signing.txt
+          test "$(grep -Fc "  $asset" SHA256SUMS-macos)" -eq 1
+          grep -F "  $asset" SHA256SUMS-macos | shasum -a 256 --check -
+          signing=$(tr -d '[:space:]' < macos-signing.txt)
+          case "$signing" in developer-id|ad-hoc) ;; *) exit 1 ;; esac
           echo "macOS signing mode: $signing"
 
-          url="https://github.com/panticonic/vibestudio/releases/download/${tag}/${asset}"
-          node scripts/render-cask.mjs "${tag#v}" "$asset" "$url" "$signing" > Casks/vibestudio.rb
+          url="https://github.com/panticonic/vibestudio/releases/download/${RELEASE_TAG}/${asset}"
+          node scripts/render-cask.mjs "$RELEASE_VERSION" "$asset" "$url" "$signing" > Casks/vibestudio.rb
           rm -f "$asset" SHA256SUMS-macos macos-signing.txt
           cat Casks/vibestudio.rb
 
-      - name: Render the headless server formula
+      - name: Render the matching headless server formula
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          # The server is published to npm rather than as an archive, so the
-          # registry is the source for both the version and its digest — never
-          # a checksum computed here, which would pin whatever was downloaded.
           metadata=$(curl -fsSL \
             -H "accept: application/vnd.npm.install-v1+json" \
             https://registry.npmjs.org/@panticonic/vibestudio-server)
-          version=$(printf '%s' "$metadata" | jq -r '."dist-tags".latest // empty')
-          if [ -z "$version" ]; then
-            echo "the server package has no published latest version; leaving the formula alone"
-            exit 0
-          fi
-          tarball=$(printf '%s' "$metadata" | jq -r --arg v "$version" '.versions[$v].dist.tarball')
-          sha256=$(printf '%s' "$metadata" | jq -r --arg v "$version" '.versions[$v].dist.integrity // empty' \
-            | sed 's/^sha512-.*$//')
-          if [ -z "$sha256" ]; then
-            # npm publishes sha512 integrity for new versions and a legacy
-            # shasum for older ones; Homebrew wants sha256 of the same bytes.
-            curl -fsSL "$tarball" -o server.tgz
-            sha256=$(sha256sum server.tgz | cut -d" " -f1)
-            rm -f server.tgz
-          fi
-          node scripts/render-server-formula.mjs "$version" "$tarball" "$sha256" \
+          tarball=$(jq -er --arg v "$RELEASE_VERSION" '.versions[$v].dist.tarball' <<<"$metadata")
+          integrity=$(jq -er --arg v "$RELEASE_VERSION" '.versions[$v].dist.integrity' <<<"$metadata")
+          curl -fsSL "$tarball" -o server.tgz
+          actual="sha512-$(openssl dgst -sha512 -binary server.tgz | openssl base64 -A)"
+          test "$actual" = "$integrity"
+          sha256=$(sha256sum server.tgz | cut -d" " -f1)
+          rm -f server.tgz
+          node scripts/render-server-formula.mjs "$RELEASE_VERSION" "$tarball" "$sha256" \
             > Formula/vibestudio-server.rb
           cat Formula/vibestudio-server.rb
+
+      - name: Validate coherent tap output
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          test "$(sed -n 's/^  version "\(.*\)"$/\1/p' Casks/vibestudio.rb)" = "$RELEASE_VERSION"
+          grep -Fq "vibestudio-server-${RELEASE_VERSION}.tgz" Formula/vibestudio-server.rb
+          ruby -c Casks/vibestudio.rb
+          ruby -c Formula/vibestudio-server.rb
 
       - name: Commit when the tap changed
         run: |
